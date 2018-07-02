@@ -10,6 +10,7 @@ import re
 import sys
 import subprocess
 import tarfile
+import zipfile
 import urllib, urllib2
 from Foundation import NSUserName
 
@@ -56,65 +57,44 @@ def getModule(module):
         None if module not found on pypi.
 
 	"""
-	pypi_url = "https://pypi.python.org"
-	pypi_path = "%s/pypi/%s" % (pypi_url, module)
-	index_regex = r'Index of Packages'
-	module_regex = r'/pypi/' + module + '/(\d+\.)+(\d+)'
-	source_regex = r'https://pypi.python.org/packages/source/.+tar\.gz#md5=[^"]+'
-	# If page is an "Index of Packages" page then find the url for the page for the most recent version
-	isIndex = getMatch(pypi_path, index_regex)
-	if isIndex:
-		new_path = getMatch(pypi_path, module_regex)
-		pypi_path = pypi_url + new_path
+
+	pypi_url = "https://pypi.org/project"
+	pypi_path = "%s/%s/#files" % (pypi_url, module)
+	source_regex = r'https://files.pythonhosted.org/packages/.+' + module + '-.+(gz|zip)'
+
 	# Get url to the tarred, zipped source file
 	source_url = getMatch(pypi_path, source_regex)
 	# If source url cannot be found skip the module
 	if not source_url:
 		print "%s not found on PyPi. Ensure the module name is spelled correctly." % module
 		return None
-	if not os.path.exists(module):
-		os.makedirs(module)
+
 	# Creates path to file where zip will be downloaded
 	zip_file = source_url.split('/')[-1].split('#')[0]
-	zip_path = module + "/" + zip_file
-	module_name = zip_file.split('.tar.gz')[0]
+	if zip_file.endswith("zip"):
+		archiveType = ".zip"
+	else:
+		archiveType = ".tar.gz"
+	module_name_version = zip_file.split(archiveType)[0]
+	module_name = zip_file.split('-')[0]
+	zip_path = module_name + "/" + zip_file
+
+	if not os.path.exists(module_name):
+		os.makedirs(module_name)
+	
 	# Downloads zip
 	urllib.urlretrieve(source_url, zip_path)
 	# Preps module tar.gz file to be extracted
-	tfile = tarfile.open(zip_path, 'r:gz')
+	if archiveType == ".zip":
+		tfile = zipfile.ZipFile(zip_path, 'r')
+	else:
+		tfile = tarfile.open(zip_path, 'r:gz')
 	# Extracts contents of module tar.gz to directory for module
-	tfile.extractall(module + "/" + module_name + "/")
+	tfile.extractall(module_name + "/" + module_name_version + "/")
 	# Gets the modules root directory from the recently extracted contents
-	module_dir = min(glob.iglob(module + "/*"), key=os.path.getctime)
+	module_dir = module_name + "/" + module_name_version
 	tfile.close()
 	return module_dir
-
-def getMatch(url, regex):
-	"""
-	Searchs html at specified URL for matches to given regex pattern.
-
-    Args:
-        url   (str): URL for webpage to search html of.
-        regex (str): Regex for pattern to find match for.
-
-    Returns:
-        First match to regex if found.
-        Empty string otherwise.
-
-	"""
-	# Tries to open URL for reading. If url doesn't exist raises exception.
-	try:
-		f = urllib2.urlopen(url)
-	except:
-		return ""
-	# If url open successful reads contents of html into string html
-	html = f.read()
-	pattern = re.compile(regex)
-	match = pattern.search(html)
-	if match:
-		return match.group(0)
-	else:
-		return ""
 
 def hasPkgInfo(pkginfo_path):
 	"""
@@ -129,6 +109,30 @@ def hasPkgInfo(pkginfo_path):
 
 	"""
 	return os.path.exists(pkginfo_path)
+
+def getMatch(url, regex):
+	"""
+	Searchs html at specified URL for matches to given regex pattern.
+    Args:
+        url   (str): URL for webpage to search html of.
+        regex (str): Regex for pattern to find match for.
+    Returns:
+        First match to regex if found.
+        Empty string otherwise.
+	"""
+	# Tries to open URL for reading. If url doesn't exist raises exception.
+	try:
+		f = urllib2.urlopen(url)
+	except:
+		return ""
+	# If url open successful reads contents of html into string html
+	html = f.read()
+	pattern = re.compile(regex)
+	match = pattern.search(html)
+	if match:
+		return match.group(0)
+	else:
+		return ""
 
 def getPkgInfo(module_dir):
 	"""
@@ -164,7 +168,7 @@ def makeDMG(module_dir):
 	# Get portion of module path that specifies name and version
 	name_vers = module_dir.split('/')[-1]
 	# Prep bash command string to create module dmg
-	mk_dmg_args = "hdiutil create -volname %s -srcfolder %s -ov -format UDZO %s.dmg" % (name_vers, module_dir, name_vers)
+	mk_dmg_args = "hdiutil create -fs HFS+ -volname %s -srcfolder %s -ov -format UDZO %s.dmg" % (name_vers, module_dir, name_vers)
 	# Try to create DMG, print error if exception occurs
 	try:
 		subprocess.check_call(mk_dmg_args.split())
@@ -200,7 +204,7 @@ def makePkgInfo(dmg_path, info):
 	# Get path to directory holding files for this tool
 	tool_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
 	# Path to plist file pkginfo keys are written to
-	pkginfo_path = os.getcwd() + "/" + dmg_name + ".pkginfo"
+	pkginfo_path = os.getcwd() + "/" + dmg_name + ".plist"
 	# Path to setup.py within module tmp directory
 	setup_path = tmp_path + "/" + dmg_name
 	pkginfo = dict(
